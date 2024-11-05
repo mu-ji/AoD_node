@@ -51,9 +51,7 @@ const static uint8_t ble_uuid[16]       = {
 //=========================== variables =======================================
 
 enum {
-    APP_FLAG_START_FRAME = 0x01,
-    APP_FLAG_END_FRAME   = 0x02,
-    APP_FLAG_SYNC_DONE   = 0x04,
+    APP_FLAG_SYNC_DONE   = 0x01,
 };
 
 typedef enum {
@@ -105,6 +103,7 @@ void     cb_slot_timer(void);
 void     cb_inner_slot_timer(void);
 
 void     assemble_ibeacon_packet(uint8_t);
+void     cal_angle(void);
 
 //=========================== main ============================================
 
@@ -230,10 +229,12 @@ void cb_endFrame(PORT_TIMER_WIDTH timestamp) {
     
     case APP_FLAG_SYNC_DONE:
         radio_rfOff();
+        cal_angle();
     break;
     default:
         app_vars.flags |= APP_FLAG_SYNC_DONE;
         radio_rfOff();
+        cal_angle();
     }
 }
 
