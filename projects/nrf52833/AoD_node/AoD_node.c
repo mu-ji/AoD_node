@@ -44,7 +44,8 @@ const static uint8_t ble_uuid[16]       = {
 
 #define NUM_SLOTS       5
 #define SLOTDURATION    (32768/200)  // 5ms@ (32768/200)
-#define SENDING_OFFSET  (32768/1000) // 1ms@ (32768/200)
+#define SENDING_OFFSET  (32768/1000) // 1ms@ (32768/1000)
+#define TURNON_OFFSET   (32768/10000) // 0.1ms@ (32768/10000)
 
 
 //=========================== variables =======================================
@@ -87,6 +88,7 @@ typedef struct {
                 uint8_t         slot_timerId;
                 uint8_t         inner_timerId;
                 uint8_t         slot_offset;
+                uint32_t        time_slotStartAt;
 
                 uint8_t         uart_txFrame[LENGTH_SERIAL_FRAME];
 } app_vars_t;
@@ -151,40 +153,17 @@ int mote_main(void) {
     radio_rfOn();
     // freq type only effects on scum port
     radio_setFrequency(CHANNEL, FREQ_RX);
+    radio_rxEnable();
 
 
     while (1) {
-        switch(app_vars.flags) {
-        case APP_FLAG_SYNC_DONE:
-        break;
-        default:
-            board_sleep();
-        }
+        //switch(app_vars.flags) {
+        //case APP_FLAG_SYNC_DONE:
+        //break;
+        //default:
+        board_sleep();
+        //}
 
-
-        app_vars.txpk_txNow = 0;
-        while (app_vars.txpk_txNow==0) {
-            board_sleep();
-        }
-
-        // if I get here, I just received a packet
-
-        //===== send notification over serial port
-
-        // led
-        //leds_error_on();
-        leds_error_toggle();
-        // prepare packet
-        app_vars.packet_len = sizeof(app_vars.packet);
-        
-        assemble_ibeacon_packet(packet_counter);
-
-        // start transmitting packet
-        radio_loadPacket(app_vars.packet,LENGTH_PACKET);
-
-        radio_txEnable();
-        radio_txNow();
-        packet_counter++;
     }
 }
 //=========================== private =========================================
@@ -234,6 +213,7 @@ void cb_startFrame(PORT_TIMER_WIDTH timestamp) {
     break;
     // if sync not done, sync board
     default:
+        // sechedule next slot 
         sctimer_setCompare(app_vars.slot_timerId, sctimer_readCounter() + SLOTDURATION - SENDING_OFFSET);
         app_vars.slot_offset = 0;
     }
@@ -249,26 +229,60 @@ void cb_endFrame(PORT_TIMER_WIDTH timestamp) {
     switch (app_vars.flags) {
     
     case APP_FLAG_SYNC_DONE:
+        radio_rfOff();
     break;
     default:
         app_vars.flags |= APP_FLAG_SYNC_DONE;
+        radio_rfOff();
     }
 }
 
 void cb_slot_timer(void) {
-    // set flag
-    //app_vars.flags |= APP_FLAG_TIMER;
+    leds_error_toggle();
+    // update slot offset
+    app_vars.slot_offset = (app_vars.slot_offset+1)%NUM_SLOTS;
 
-    // update debug stats
-    app_dbg.num_timer++;
-    app_vars.txpk_txNow = 1;
+    // schedule next slot
+    app_vars.time_slotStartAt += SLOTDURATION;
+    sctimer_setCompare(app_vars.slot_timerId, app_vars.time_slotStartAt);
 
-    sctimer_setCompare(sctimer_readCounter()+TIMER_PERIOD);
+    // check which slotoffset is right now
+
+    switch(app_vars.slot_offset) {
+    case 0:
+   
+        // set when to turn of the radio
+        sctimer_setCompare(app_vars.inner_timerId, app_vars.time_slotStartAt+SENDING_OFFSET-TURNON_OFFSET);
+        
+    break;
+    case 1:
+        // send packet 
+                // prepare to send
+        
+        // prepare packet
+        app_vars.packet_len = sizeof(app_vars.packet);
+        assemble_ibeacon_packet(app_vars.pkt_sqn++);
+
+        //prepare radio
+        radio_rfOn();
+        radio_setFrequency(CHANNEL, FREQ_RX);
+        radio_loadPacket(app_vars.packet,LENGTH_PACKET);
+        radio_txEnable();
+
+        // no need to schedule a time
+        radio_txNow();
+    break;
+    default:
+    break;
+    }
+
 }
 
 void cb_inner_slot_timer(void) {
 
-    radio_txNow();
+    radio_rfOn();
+    radio_setFrequency(CHANNEL, FREQ_RX);
+    radio_rxEnable();
 }
 
 
