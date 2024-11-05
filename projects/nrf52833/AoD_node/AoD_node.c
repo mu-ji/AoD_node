@@ -43,16 +43,12 @@ const static uint8_t ble_uuid[16]       = {
 };
 
 #define NUM_SLOTS       5
-#define SLOTDURATION    (32768/200)  // 5ms@ (32768/200)
+#define SLOT_DURATION    (32768/200)  // 5ms@ (32768/200)
 #define SENDING_OFFSET  (32768/1000) // 1ms@ (32768/1000)
-#define TURNON_OFFSET   (32768/10000) // 0.1ms@ (32768/10000)
+#define TURNON_OFFSET   (32768/2000) // 0.1ms@ (32768/10000)
 
 
 //=========================== variables =======================================
-
-enum {
-    APP_FLAG_SYNC_DONE   = 0x01,
-};
 
 typedef enum {
     APP_STATE_TX         = 0x01,
@@ -69,7 +65,7 @@ typedef struct {
 app_dbg_t app_dbg;
 
 typedef struct {
-                uint8_t         flags;
+                bool            isSynced;
                 uint8_t         packet[LENGTH_PACKET];
                 uint8_t         packet_len;
                 int8_t          rxpk_rssi;
@@ -87,6 +83,8 @@ typedef struct {
                 uint8_t         inner_timerId;
                 uint8_t         slot_offset;
                 uint32_t        time_slotStartAt;
+
+                uint32_t        capture_time;
 
                 uint8_t         uart_txFrame[LENGTH_SERIAL_FRAME];
 } app_vars_t;
@@ -153,16 +151,11 @@ int mote_main(void) {
     // freq type only effects on scum port
     radio_setFrequency(CHANNEL, FREQ_RX);
     radio_rxEnable();
+    radio_rxNow();
 
 
     while (1) {
-        //switch(app_vars.flags) {
-        //case APP_FLAG_SYNC_DONE:
-        //break;
-        //default:
         board_sleep();
-        //}
-
     }
 }
 //=========================== private =========================================
@@ -202,49 +195,68 @@ void assemble_ibeacon_packet(uint8_t pkt_sqn) {
 //=========================== callbacks =======================================
 
 void cb_startFrame(PORT_TIMER_WIDTH timestamp) {
-    // set flag
-    //app_vars.flags |= APP_FLAG_START_FRAME;
 
-    // update debug stats
-    switch (app_vars.flags) {
-    // if sync done, do nothing
-    case APP_FLAG_SYNC_DONE:
-    break;
-    // if sync not done, sync board
-    default:
-        // sechedule next slot 
-        sctimer_setCompare(app_vars.slot_timerId, sctimer_readCounter() + SLOTDURATION - SENDING_OFFSET);
-        app_vars.slot_offset = 0;
-    }
+    app_vars.capture_time = timestamp;
+
     app_dbg.num_startFrame++;
 }
 
 void cb_endFrame(PORT_TIMER_WIDTH timestamp) {
-    // set flag
-    //app_vars.flags |= APP_FLAG_END_FRAME;
 
-    // update debug stats
+
+    bool isTargetPkt;
+
     app_dbg.num_endFrame++;
-    switch (app_vars.flags) {
-    
-    case APP_FLAG_SYNC_DONE:
-        radio_rfOff();
+
+    // receive radio packet
+
+    isTargetPkt = FALSE;
+
+    radio_rfOff();
+
+    radio_getReceivedFrame(
+        app_vars.packet,
+        &app_vars.packet_len,
+        sizeof(app_vars.packet),
+        &app_vars.rxpk_rssi,
+        &app_vars.rxpk_lqi,
+        &app_vars.rxpk_crc
+    );
+
+    // check if the frame is target one
+
+    // it's target packet
+
+    if (isTargetPkt) {
+        if (app_vars.isSynced) {
+        
+            cal_angle();
+        } else {
+        
+            app_vars.slot_offset = 0;
+            app_vars.time_slotStartAt = app_vars.capture_time + SLOT_DURATION - SENDING_OFFSET;
+            sctimer_setCompare(app_vars.slot_timerId, app_vars.time_slotStartAt);
+        }
         cal_angle();
-    break;
-    default:
-        app_vars.flags |= APP_FLAG_SYNC_DONE;
-        radio_rfOff();
-        cal_angle();
+
+        return;
+    }
+
+    if (app-vars.isSynced == FALSE) {
+        radio_rxEnable();
+        radio_rxNow();
     }
 }
 
 void cb_slot_timer(void) {
+
     leds_error_toggle();
+
     // update slot offset
     app_vars.slot_offset = (app_vars.slot_offset+1)%NUM_SLOTS;
 
     // schedule next slot
-    app_vars.time_slotStartAt += SLOTDURATION;
+    app_vars.time_slotStartAt += SLOT_DURATION;
     sctimer_setCompare(app_vars.slot_timerId, app_vars.time_slotStartAt);
 
     // check which slotoffset is right now
